@@ -1,0 +1,114 @@
+# MPU6050 Driver Restructuring and Planned SPI Migration
+
+**Project:** ESP32-Based Drone Flight Controller  
+**Platform:** ESP32-WROOM-DA  
+**Framework:** ESP-IDF with FreeRTOS  
+**Current Interface:** I²C  
+**Planned Direction:** SPI-based IMU interfacing after the complete flight-controller architecture has been transferred to ESP-IDF
+
+## 1. Objective
+
+The objective of this phase was to restructure the MPU6050 sensor driver into a modular Embedded C implementation using ESP-IDF's I²C master driver. This establishes a clean interface between the inertial measurement unit (IMU), sensor-data processing, and the future flight-control architecture.
+
+The work also establishes a staged migration plan: first complete the architecture transfer from the existing implementation to ESP-IDF, then evaluate and implement SPI-based IMU communication.
+
+## 2. MPU6050 Driver Restructuring
+
+The sensor implementation was organized into separate header and source files.
+
+- `mpu_6050.h`: Defines register addresses, raw and scaled data structures, and public driver function declarations.
+- `mpu_6050.c`: Implements sensor initialization, register-level communication, raw data acquisition, and unit conversion.
+- `app_main.c`: Initializes the I²C bus, registers the MPU6050 as a device, invokes the driver, and periodically reports sensor measurements.
+
+This separation keeps hardware communication and sensor-specific logic outside the application layer.
+
+### Driver functions
+
+**`mpu6050_init()`**
+
+Reads the WHO_AM_I register to verify device identity, then configures the power-management, sample-rate, digital low-pass filter, gyroscope, and accelerometer registers.
+
+**`mpu6050_read_raw()`**
+
+Reads the 14-byte measurement block containing three accelerometer axes, temperature, and three gyroscope axes. The received bytes are combined into signed 16-bit integer values.
+
+**`mpu6050_convert_units()`**
+
+Converts the raw accelerometer readings into g, gyroscope readings into degrees per second (dps), and temperature into degrees Celsius using the configured sensor ranges.
+
+### Communication and execution flow
+
+1. Initialize the ESP-IDF I²C master bus.
+2. Register the MPU6050 at its configured I²C address, `0x68`.
+3. Initialize the sensor and verify its identity.
+4. Read the raw measurement registers.
+5. Convert the readings into engineering units.
+6. Report the results through ESP-IDF logging.
+7. Repeat acquisition at a nominal 100 ms interval during the initial validation phase.
+
+The current implementation uses ESP-IDF's `i2c_master_transmit()` and `i2c_master_transmit_receive()` APIs. Error codes are checked so communication failures and device-identification failures can be diagnosed explicitly.
+
+## 3. Problems Addressed During Restructuring
+
+The restructuring phase exposed several C-language and integration issues:
+
+- Duplicate structure definitions and malformed declarations in the header file.
+- Inconsistent sensor-driver filenames and function names.
+- Incorrect assignment-versus-comparison logic in the device-identification check.
+- Missing semicolons and malformed function parameters.
+- Cascading compiler errors caused by invalid source text and declarations.
+
+These issues were resolved by standardizing the header declarations and replacing the inconsistent driver implementation with a coherent version. The project subsequently compiled successfully.
+
+Compilation establishes that the source passes the current build process; successful flashing, sensor initialization, and stable measurement output remain the next runtime validation steps.
+
+## 4. Decision: Complete the ESP-IDF Architecture Transfer Before Migrating to SPI
+
+The immediate decision is to **retain I²C during the architecture-transfer phase** rather than introduce a communication-interface change at the same time as the broader firmware restructuring.
+
+The current I²C implementation provides a baseline for validating sensor initialization, register access, raw-data acquisition, error handling, and application-level integration.
+
+Once the complete flight-controller architecture has been transferred to ESP-IDF, SPI migration can be evaluated as a separate engineering task. This sequence reduces the number of variables being changed simultaneously and makes subsequent debugging more systematic.
+
+The architecture transfer should include the sensor driver, FreeRTOS task structure, sampling and timing strategy, data-processing pipeline, and the interfaces required by the stabilization controller.
+
+## 5. Rationale for Considering SPI
+
+SPI offers several potential advantages for high-rate IMU acquisition.
+
+**Higher communication bandwidth:** I²C Fast Mode normally operates at up to 400 kHz, whereas SPI-capable IMUs can support substantially higher clock rates. Higher bandwidth can reduce the time spent transferring sensor data.
+
+**Reduced acquisition overhead:** SPI uses a clock, data lines, and a chip-select signal. It does not require I²C-style device addressing and per-byte acknowledgements, although the precise transaction overhead depends on the sensor protocol and driver implementation.
+
+**High-rate sampling:** Flight-control applications may require sensor sampling and control updates at hundreds of hertz or several kilohertz. SPI can provide more communication headroom for high-rate acquisition, subject to the selected IMU's capabilities, sensor configuration, processing time, and scheduling constraints.
+
+**Electrical signaling:** SPI generally uses push-pull signaling, unlike I²C's open-drain signaling. This can provide faster edges, but it does not automatically guarantee better noise immunity. PCB layout, wiring length, grounding, signal integrity, and electromagnetic interference from motors and ESCs remain important.
+
+**System-level timing:** A faster bus can reduce the communication component of acquisition latency. It does not, by itself, guarantee deterministic control-loop execution; FreeRTOS scheduling, interrupt handling, filtering, and control computation must also be considered.
+
+## 6. Important Hardware Compatibility Constraint
+
+The existing **MPU6050 supports I²C, not SPI**. Therefore, switching this specific sensor from I²C to SPI is not an available migration path.
+
+The SPI plan requires selecting a compatible IMU, such as the MPU-6500 or another sensor with a documented SPI interface. The selected device's register map, supported clock rate, sampling capabilities, interrupt behavior, and driver requirements must be verified before implementation.
+
+The previously considered figures of approximately 350–400 microseconds for an I²C burst and 10–15 microseconds for an SPI burst should be treated as illustrative estimates, not measured results or universal guarantees. Actual transfer time depends on clock configuration and transaction overhead.
+
+## 7. Planned Next Steps
+
+1. Build and flash the restructured ESP-IDF project.
+2. Verify WHO_AM_I detection and stable raw and converted sensor readings.
+3. Validate the I²C driver under repeated operation and handle communication errors.
+4. Complete the transfer of the remaining flight-controller architecture into ESP-IDF.
+5. Establish the FreeRTOS task structure and timing requirements for sensor acquisition and stabilization.
+6. Select an SPI-capable IMU based on the required sampling rate, availability, and integration effort.
+7. Implement and validate the SPI driver as a separate module.
+8. Measure acquisition latency and timing jitter before comparing the new implementation against the I²C baseline.
+
+## Conclusion
+
+The MPU6050 restructuring establishes a modular ESP-IDF sensor driver with explicit initialization, data acquisition, unit conversion, and error handling. The project has compiled successfully, providing a baseline for runtime validation.
+
+The architectural decision is to complete the ESP-IDF migration first and defer the SPI transition until the broader flight-controller structure is established. The SPI transition will also require an SPI-capable IMU, because the existing MPU6050 cannot communicate over SPI.
+
+This staged approach separates software-architecture work from hardware-interface changes and provides a clearer basis for evaluating the timing requirements of the eventual stabilization controller.
